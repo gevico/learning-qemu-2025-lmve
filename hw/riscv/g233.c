@@ -53,6 +53,19 @@ static void g233_soc_init(Object *obj)
      * You can add more devices here(e.g. cpu, gpio)
      * Attention: The cpu resetvec is 0x1004
      */
+    
+    G233SoCState *s = RISCV_G233_SOC(obj);
+
+    /* Init cpu */
+    object_initialize_child(obj, "g233-cpus", &s->cpus, TYPE_RISCV_HART_ARRAY);
+    qdev_prop_set_uint32(DEVICE(&s->cpus), "num-harts", 1);
+    qdev_prop_set_uint32(DEVICE(&s->cpus), "hartid-base", 0);
+    qdev_prop_set_string(DEVICE(&s->cpus), "cpu-type",
+                            TYPE_RISCV_CPU_GEVICO_G233);
+    qdev_prop_set_uint64(DEVICE(&s->cpus), "resetvec", 0x1004);
+
+    /* Init GPIO */
+    object_initialize_child(obj, "sifive.gpio0", &s->gpio, TYPE_SIFIVE_GPIO);
 }
 
 static void g233_soc_realize(DeviceState *dev, Error **errp)
@@ -63,7 +76,9 @@ static void g233_soc_realize(DeviceState *dev, Error **errp)
     const MemMapEntry *memmap = g233_memmap;
 
     /* CPUs realize */
-
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->cpus), errp)) {
+        return;
+    }
     /* Mask ROM */
     memory_region_init_rom(&s->mask_rom, OBJECT(dev), "riscv.g233.mrom",
                            memmap[G233_DEV_MROM].size, &error_fatal);
@@ -149,6 +164,7 @@ static void g233_machine_init(MachineState *machine)
     const MemMapEntry *memmap = g233_memmap;
 
     G233MachineState *s = RISCV_G233_MACHINE(machine);
+    MemoryRegion *sys_mem = get_system_memory();
     int i;
     RISCVBootInfo boot_info;
 
@@ -160,10 +176,12 @@ static void g233_machine_init(MachineState *machine)
     }
 
     /* Initialize SoC */
-
+    object_initialize_child(OBJECT(machine), "soc", &s->soc, TYPE_RISCV_G233_SOC);
+    qdev_realize(DEVICE(&s->soc), NULL, &error_fatal);
 
     /* Data Memory(DDR RAM) */
-
+    memory_region_add_subregion(sys_mem, memmap[G233_DEV_DRAM].base,
+                                machine->ram);
     /* Mask ROM reset vector */
     uint32_t reset_vec[5];
     reset_vec[1] = 0x0010029b; /* 0x1004: addiw  t0, zero, 1 */
@@ -177,7 +195,7 @@ static void g233_machine_init(MachineState *machine)
     }
     rom_add_blob_fixed_as("mrom.reset", reset_vec, sizeof(reset_vec),
                           memmap[G233_DEV_MROM].base, &address_space_memory);
-
+    /* 初始化引导信息结构体 */
     riscv_boot_info_init(&boot_info, &s->soc.cpus);
     if (machine->kernel_filename) {
         riscv_load_kernel(machine, &boot_info,
