@@ -29,6 +29,40 @@
 #include "trace.h"
 
 /* Exceptions processing helpers */
+
+void helper_dma(CPURISCVState *env, 
+                target_ulong dst_addr, 
+                target_ulong src_addr,
+                target_ulong grain_size)
+{
+    /* 计算矩阵维度 */
+    int matrix_size = 8 << grain_size;  // M = N = 8 * 2^grain_size
+    int M = matrix_size;
+    int N = matrix_size;
+    
+    /* 获取返回地址用于异常处理 */
+    uintptr_t ra = GETPC();
+    
+    /* 执行矩阵转置 */
+    for (int row = 0; row < N; row++) {
+        for (int col = 0; col < M; col++) {
+            /* 计算源矩阵中的偏移：按行优先存储 */
+            target_ulong src_offset = (row * M + col) * sizeof(uint32_t);
+            
+            /* 从源地址安全读取32位数据 */
+            uint32_t data_value = cpu_ldl_data_ra(env, src_addr + src_offset, ra);
+            
+            /* 计算目标矩阵中的偏移：转置后按列优先存储 */
+            target_ulong dst_offset = (col * N + row) * sizeof(uint32_t);
+            
+            /* 向目标地址安全写入32位数据 */
+            cpu_stl_data_ra(env, dst_addr + dst_offset, data_value, ra);
+        }
+    }
+    
+    /* 可选：添加性能统计或调试信息 */
+    // trace_dma_transpose_completed(M, N, src_addr, dst_addr);
+}
 G_NORETURN void riscv_raise_exception(CPURISCVState *env,
                                       RISCVException exception,
                                       uintptr_t pc)
