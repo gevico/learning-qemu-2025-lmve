@@ -63,6 +63,150 @@ void helper_dma(CPURISCVState *env,
     /* 可选：添加性能统计或调试信息 */
     // trace_dma_transpose_completed(M, N, src_addr, dst_addr);
 }
+
+void helper_sort(CPURISCVState *env, 
+                 target_ulong array_addr, 
+                 target_ulong array_length,
+                 target_ulong grain_size)
+{
+    uintptr_t ra = GETPC();
+    
+    /* 边界检查 1: 空数组检查 */
+    if (array_length == 0) {
+        return;
+    }
+    
+    /* 边界检查 2: 地址对齐检查 */
+    if (array_addr & 0x3) {
+        /* 地址未按4字节对齐，抛出异常 */
+        riscv_raise_exception(env, RISCV_EXCP_LOAD_ADDR_MIS, ra);
+        return;
+    }
+    
+    /* 确定实际参与排序的元素数量 */
+    target_ulong num_elements = (grain_size <= array_length) ? grain_size : array_length;
+    
+    /* 边界检查 3: 最大元素数量限制 */
+    const target_ulong MAX_SORT_ELEMENTS = 1024;
+    if (num_elements > MAX_SORT_ELEMENTS) {
+        num_elements = MAX_SORT_ELEMENTS;
+    }
+    
+    /* 边界检查 4: 最小元素数量检查 */
+    if (num_elements <= 1) {
+        return; // 0或1个元素无需排序
+    }
+    
+    /* 优化的冒泡排序实现 */
+    bool swapped;
+    target_ulong current_swap_bound = num_elements - 1;
+    
+    for (target_ulong i = 0; i < num_elements - 1; i++) {
+        swapped = false;
+        target_ulong new_bound = 0;
+        
+        for (target_ulong j = 0; j < current_swap_bound; j++) {
+            /* 计算相邻元素的地址 */
+            target_ulong addr_j = array_addr + j * 4;
+            target_ulong addr_j1 = array_addr + (j + 1) * 4;
+            
+            /* 读取两个元素的值 */
+            int32_t val_j = (int32_t)cpu_ldl_data_ra(env, addr_j, ra);
+            int32_t val_j1 = (int32_t)cpu_ldl_data_ra(env, addr_j1, ra);
+            
+            /* 比较并交换 */
+            if (val_j > val_j1) {
+                /* 执行交换 */
+                cpu_stl_data_ra(env, addr_j, (uint32_t)val_j1, ra);
+                cpu_stl_data_ra(env, addr_j1, (uint32_t)val_j, ra);
+                swapped = true;
+                new_bound = j; // 记录最后一次交换的位置
+            }
+        }
+        
+        /* 优化1: 如果本轮没有交换，说明数组已有序 */
+        if (!swapped) {
+            break;
+        }
+        
+        /* 优化2: 记录最后一次交换的位置，后续遍历只需到此位置 */
+        current_swap_bound = new_bound;
+        
+        /* 优化3: 小数组提前终止检查 */
+        if (current_swap_bound == 0) {
+            break;
+        }
+    }
+}
+
+void helper_crush(CPURISCVState *env, 
+                    target_ulong dst_addr,
+                    target_ulong src_addr, 
+                    target_ulong count)
+{
+    uintptr_t ra = GETPC();
+    
+    /* 参数检查：count 必须为正数 */
+    if (count == 0) {
+        return;
+    }
+    
+    /* 压缩处理：每2个字节压缩为1个字节 */
+    target_ulong out_idx = 0;
+    for (target_ulong i = 0; i < count; i += 2) {
+        /* 读取第一个字节的低4位 */
+        uint8_t a = cpu_ldub_data_ra(env, src_addr + i, ra) & 0x0F;
+        
+        /* 读取第二个字节的低4位（如果存在） */
+        uint8_t b = 0;
+        if (i + 1 < count) {
+            b = cpu_ldub_data_ra(env, src_addr + i + 1, ra) & 0x0F;
+        }
+        
+        /* 合并：a在低4位，b在高4位 */
+        uint8_t compressed = a | (b << 4);
+        
+        /* 写入压缩后的数据 */
+        cpu_stb_data_ra(env, dst_addr + out_idx, compressed, ra);
+        out_idx++;
+    }
+}
+
+void helper_expand(CPURISCVState *env, 
+                    target_ulong dst_addr,
+                    target_ulong src_addr, 
+                    target_ulong count)
+{
+    uintptr_t ra = GETPC();
+    
+    /* 参数验证 */
+    if (count == 0) {
+        return;  // 空数据直接返回
+    }
+    
+    /* 可选：最大数量限制防止过度扩展 */
+    const target_ulong MAX_EXPAND_COUNT = 4096;
+    if (count > MAX_EXPAND_COUNT) {
+        count = MAX_EXPAND_COUNT;
+    }
+    
+    /* 解压处理：每个输入字节扩展为两个输出字节 */
+    target_ulong output_index = 0;
+    for (target_ulong input_index = 0; input_index < count; input_index++) {
+        /* 从源地址读取压缩字节 */
+        uint8_t source_byte = cpu_ldub_data_ra(env, src_addr + input_index, ra);
+        
+        /* 分离低4位并写入目标 */
+        uint8_t lower_4bits = source_byte & 0x0F;
+        cpu_stb_data_ra(env, dst_addr + output_index, lower_4bits, ra);
+        output_index++;
+        
+        /* 分离高4位并写入目标 */
+        uint8_t upper_4bits = (source_byte >> 4) & 0x0F;
+        cpu_stb_data_ra(env, dst_addr + output_index, upper_4bits, ra);
+        output_index++;
+    }
+}
 G_NORETURN void riscv_raise_exception(CPURISCVState *env,
                                       RISCVException exception,
                                       uintptr_t pc)
