@@ -36,6 +36,9 @@
 #include "hw/char/pl011.h"
 
 /* TODO: you need include some header files */
+#include "hw/ssi/g233_spi.h"
+#include "hw/ssi/ssi.h"
+#include "hw/qdev-properties.h"
 
 static const MemMapEntry g233_memmap[] = {
     [G233_DEV_MROM] =     {     0x1000,     0x2000 },
@@ -44,6 +47,7 @@ static const MemMapEntry g233_memmap[] = {
     [G233_DEV_UART0] =    { 0x10000000,     0x1000 },
     [G233_DEV_GPIO0] =    { 0x10012000,     0x1000 },
     [G233_DEV_PWM0] =     { 0x10015000,     0x1000 },
+    [G233_DEV_SPI0] =     { 0x10018000,     0x1000 },
     [G233_DEV_DRAM] =     { 0x80000000, 0x40000000 },
 };
 
@@ -133,6 +137,33 @@ static void g233_soc_realize(DeviceState *dev, Error **errp)
     /* SiFive.PWM0 */
     create_unimplemented_device("riscv.g233.pwm0",
         memmap[G233_DEV_PWM0].base, memmap[G233_DEV_PWM0].size);
+    
+    /* G233 SPI0 初始化*/
+    DeviceState *spi = qdev_new(TYPE_G233_SPI);
+    sysbus_realize(SYS_BUS_DEVICE(spi), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(spi), 0, memmap[G233_DEV_SPI0].base);
+
+    /* 连接 flash 到 spi */
+    SSIBus *ssibus = (SSIBus *)qdev_get_child_bus(DEVICE(spi), "ssi");
+
+    /* 创建两个Winbond SPI NOR闪存设备，分别连接到SPI控制器的不同片选线上 */
+    DeviceState *flash = qdev_new("w25x16");
+    DeviceState *flash1 = qdev_new("w25x32");
+    
+    qdev_prop_set_uint8(flash, "cs", 0);
+    qdev_prop_set_uint8(flash1, "cs", 1);
+    /* 在SPI总线上实例化这两个闪存设备 */
+    ssi_realize_and_unref(flash, ssibus, &error_fatal);
+    ssi_realize_and_unref(flash1, ssibus, &error_fatal);
+    
+    qemu_irq flash_cs_in = qdev_get_gpio_in_named(flash, SSI_GPIO_CS, 0);
+    qemu_irq flash1_cs_in = qdev_get_gpio_in_named(flash1, SSI_GPIO_CS, 0);
+    qdev_connect_gpio_out(DEVICE(spi), 0, flash_cs_in);
+    qdev_connect_gpio_out(DEVICE(spi), 1, flash1_cs_in);
+
+    /* 连接SPI中断信号到PLIC中断控制器 */
+    qdev_connect_gpio_out(DEVICE(spi), 2,
+    qdev_get_gpio_in(DEVICE(s->plic), G233_SPI0_IRQ));
 
 }
 

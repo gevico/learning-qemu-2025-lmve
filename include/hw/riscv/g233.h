@@ -62,12 +62,14 @@ enum {
     G233_DEV_GPIO0,
     G233_DEV_UART0, /* PL011 */
     G233_DEV_PWM0,
+    G233_DEV_SPI0,
     G233_DEV_DRAM
 };
 
 enum {
     G233_UART0_IRQ  = 1,
     G233_PWM0_IRQ   = 2,
+    G233_SPI0_IRQ   = 3,
     G233_GPIO0_IRQ0 = 8
 };
 
